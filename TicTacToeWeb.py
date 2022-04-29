@@ -1,168 +1,60 @@
 # Web版本的超级井字棋
-from tkinter.messagebox import NO
+from pickle import FALSE
 import pywebio
 from pywebio import output as o
+from pywebio import input as i
 from pywebio import session
+from utils import GameField
+from utils import update_score
+import pandas as pd
 import time
 
 # 当前会话
 session_id = 0
 # 玩家人数
-player_count = [0, 0]
+player_info = [None, None]
+room_player = {}
+refresh = True
 
-class GameField:
-    def __init__(self) -> None:
-        # 玩家得分
-        self.players_score = [0, 0]
-        # 总棋子数
-        self.count = 0
-        # 棋盘
-        self.field = [[-1]*9 for _ in range(9)]
-        # 当前轮次
-        self.round = 0
-        # loc确定当前可行的棋子范围
-        self.loc = 0 # 0表示可以在任意位置下棋
-        self.last_pos = None # 记录上一步棋子的位置
-        # 重置棋盘
-        self.reset()
-    
-    # 重置棋盘
-    def reset(self):
-        # 玩家得分
-        self.players_score = [0, 0]
-        # 总棋子数
-        self.count = 0
-        self.loc = 0
-        self.last_pos = None
-        # 棋盘
-        self.field = [[-1]*9 for _ in range(9)]
-    
-    # 检查游戏是否结束
-    def check_end(self):
-        if self.count == 81:
-            return True
-        return False
-    
-    # 检查当前位置是否能放置棋子
-    def check_pos(self, pos : tuple):
-        if self.loc == 0:
-            return True
-        x, y = pos
-        loc = 3 * (x // 3) + (y // 3) + 1
-        if loc == self.loc:
-            return True
-        return False
-    
-    def check_loc(self):
-        # 获取当前网格范围
-        r1 = 3*( (self.loc-1) // 3)
-        r2 = r1 + 3
-        c1 = 3*( (self.loc-1) % 3)
-        c2 = c1 + 3
-        for x in range(r1,r2):
-            for y in range(c1,c2):
-                if self.field[x][y] == -1:
-                    return True
-        return False
-        
-    # 更新游戏分数
-    def update_score(self, pos : list) -> None:
-        """
-        update_score(self, pos : list) -> None
-            更新游戏分数
-        
-        Parameters
-        ----------
-        pos : list
-            最后一步操作的坐标
-        """
-        piece = 1 if self.round == 1 else 0
-        # 获取当前网格范围
-        r1 = 3*( (self.loc-1) // 3)
-        r2 = r1 + 3
-        c1 = 3*( (self.loc-1) % 3)
-        c2 = c1 + 3
-        # 检验横轴
-        cnt = 0
-        for i in range(c1,c2):
-            if self.field[pos[0]][i] == piece:
-                cnt += 1
-        if cnt == 3:
-            self.players_score[self.round] += 1
-        # 检验纵轴
-        cnt = 0
-        for i in range(r1,r2):
-            if self.field[i][pos[1]] == piece:
-                cnt += 1
-        if cnt == 3:
-            self.players_score[self.round] += 1
-        # 检验对角线
-        diag = [(r1 + i,c1 + i) for i in range(3)]
-        anti_diag = [(r1 + i,c2 - 1 - i) for i in range(3)]
-        if pos in diag:
-            cnt = 0
-            for x,y in diag:
-                if self.field[x][y] == piece:
-                    cnt += 1
-            if cnt == 3:
-                self.players_score[self.round] += 1
-        if pos in anti_diag:
-            cnt = 0
-            for x,y in anti_diag:
-                if self.field[x][y] == piece:
-                    cnt += 1
-            if cnt == 3:
-                self.players_score[self.round] += 1
-    
-    def set_chess(self, args):
-        pos = args[0]
-        my_turn = args[1]
-        # 当前不是你的回合
-        if self.round != my_turn:
-            o.toast("当前不是你的回合", color='error')
-            return
-        # 如果当前位置无法放置棋子
-        if not self.check_pos(pos):
-            o.toast("当前不能在该位置放置棋子！", color='error')
-            return
-        # 放置棋子
-        x, y = pos
-        self.field[x][y] = my_turn
-        self.last_pos = (x,y)
-        # 更新分数
-        if self.loc == 0:
-            self.loc = 3 * (x % 3) + (y % 3) + 1
-        self.update_score(pos)
-        # 更新下棋位置
-        self.loc = 3 * (x % 3) + (y % 3) + 1
-        # 判断是否有下棋点，没有则获得任意下棋的机会
-        if not self.check_loc():
-            self.loc = 0
-            o.toast("对手获得一次任意放置棋子的机会！", color='success')
-        # 切换轮次
-        self.round = (self.round + 1) % 2
-        self.count += 1
-    
 # 创建游戏棋盘
 game_field = GameField()
 # 游戏主函数入口
 def main():
-    global session_id, game_field
+    global session_id, game_field, refresh, room_player, player_info
+
+    if refresh:
+        session_id = 0
+        player_info = [None, None]
+        room_player = {}
+        game_field.reset()
+        refresh = False
+        
+    def check_user_name(name : str):
+        if name in room_player:
+            return "房间内有相同的昵称存在，请更换一个昵称！"
+    # 输入用户名
+    user_name = i.input("设定你的游戏昵称",required=True,validate=check_user_name)
 
     # 玩家退出
     @session.defer_call
     def player_exit():
         # 玩家人数减1
-        player_count[my_turn] -= 1
+        if user_name in room_player:
+            del room_player[user_name]
     
     # 判断轮次
-    my_turn = session_id % 2
-    # 选择棋子
-    my_chess = ['🟨', '🟢'][my_turn]
+    my_chess = None
+    if session_id < 2:
+        my_turn = session_id % 2
+        # 选择棋子
+        my_chess = ['🟨', '🟢'][my_turn]
+        player_info[my_turn] = user_name
+    else:
+        my_turn = None
     # 轮次更新
     session_id += 1
-    # 玩家人数
-    player_count[my_turn] += 1
+    # 记录玩家信息
+    room_player[user_name] = [my_chess,my_turn,session_id]
     # 初始化环境
     session.set_env(title="TicTacToe",output_animation=False)
 
@@ -174,10 +66,22 @@ def main():
     </style>""")
     # 输出信息
     o.put_markdown(f"""## 超级井字棋""")
-    o.put_markdown(f"""所有在线玩家会被分为2组，分别控制黄色方棋🟨和绿色圆棋🟢  
-    <font color=royalblue>**当前在线玩家人数:**</font> **{player_count[0]} for 🟨, {player_count[1]} for 🟢**  
-    <font color=tomato>**你控制的棋子是 {my_chess}**</font>""")
     
+    # 显示玩家堆栈信息
+    if session_id == 1:
+        while player_info[1] is None:
+            with o.use_scope('info', clear=True) as info:
+                o.put_markdown(f"""<font color=royalblue>**当前游戏玩家:**</font> **🟨：{player_info[0]}**""")
+                o.put_row([o.put_markdown(f"""**等待另一个玩家加入...**"""), o.put_loading().style('width:1.5em; height:1.5em')], size='auto 1fr')
+                while player_info[1] is None:
+                    time.sleep(0.2)
+        o.clear(info)
+    o.put_markdown(f"""<font color=royalblue>**当前游戏玩家:**</font> **🟨：{player_info[0]},&nbsp;&nbsp;🟢：{player_info[1]}**""")
+    if session_id <= 2:
+        o.put_row([o.put_markdown("你的游戏昵称：<font color=magenta>**%s**</font>,&nbsp;&nbsp;"%(user_name)), o.put_markdown(f"""<font color=tomato>**你控制的棋子是 {my_chess}**</font>""")], size='auto 1fr')
+    else:
+        o.put_row([o.put_markdown("你的游戏昵称：%s,&nbsp;&nbsp;"%(user_name)), o.put_markdown("""<font color=tomato>**在当前房间，你仅能观看比赛**</font>""")], size='auto 1fr')
+
     # 显示棋盘
     @o.use_scope('board', clear=True)
     def show_board():
@@ -198,14 +102,20 @@ def main():
                     table_row.append(o.put_text(['🟨', '🟢'][cell]).style("width:50px; height: 50px; text-align: center; line-height: 50px"))
             table.append(table_row[:])
         # 绘制棋盘
-        o.put_markdown(f"""**当前比分：🟨:&nbsp;&nbsp;&nbsp;{game_field.players_score[0]}&nbsp;&nbsp;&nbsp;VS&nbsp;&nbsp;&nbsp;{game_field.players_score[1]}&nbsp;&nbsp;&nbsp;:🟢**""")
+        o.put_markdown(f"""**当前比分：{player_info[0]} 🟨:&nbsp;&nbsp;&nbsp;{game_field.players_score[0]}&nbsp;&nbsp;&nbsp;VS&nbsp;&nbsp;&nbsp;{game_field.players_score[1]}&nbsp;&nbsp;&nbsp;:🟢 {player_info[1]}**""")
         o.put_table(table)
     
     # 显示棋盘
-    # o.put_markdown(f"""**当前比分：🟨:&nbsp;&nbsp;&nbsp;{game_field.players_score[0]}&nbsp;&nbsp;&nbsp;VS&nbsp;&nbsp;&nbsp;{game_field.players_score[1]}&nbsp;&nbsp;&nbsp;:🟢**""")
     show_board()
     # 当游戏没有结束时
+    abnormal_exit = False
     while not game_field.check_end():
+        # 检查玩家是否退出
+        if player_info[0] is not None and player_info[1] is not None:
+            if player_info[0] not in room_player or player_info[1] not in room_player:
+                o.put_markdown("""<font color=red>**有玩家退出了房间，当前游戏结束！**</font>""")
+                abnormal_exit = True
+                break
         with o.use_scope('msg', clear=True):
             # 记录当前轮次
             current_round_copy = game_field.round
@@ -215,23 +125,38 @@ def main():
             # 如果当前轮次不是我的轮次
             else:
                 # 进入等待阶段，放置一个loading的图标
-                o.put_row([o.put_markdown(f"""**你对手的回合, 请等待...**"""), o.put_loading().style('width:1.5em; height:1.5em')], size='auto 1fr')
+                if my_turn is not None:
+                    o.put_row([o.put_markdown(f"""**你对手的回合, 请等待...**"""), o.put_loading().style('width:1.5em; height:1.5em')], size='auto 1fr')
             # 等待下一步操作
-            while game_field.round == current_round_copy and not session.get_current_session().closed():
+            while game_field.round == current_round_copy and not session.get_current_session().closed() and (player_info[0] in room_player and player_info[1] in room_player):
                 time.sleep(0.2)
             # 更新棋盘
             if game_field.loc == 0:
                 o.toast("你获得任意放置棋子的机会！", color='success')
             show_board()
-            
+    
+    # 游戏异常中断
+    if abnormal_exit:
+        with o.use_scope('msg', clear=True):
+            o.put_markdown(f"""**游戏未正常结束，本局游戏不计分！**""")
+            o.put_markdown(f"""**刷新页面开始新的一局游戏**""")
+            refresh = True
     # 游戏结束，显示获胜者信息
-    with o.use_scope('msg', clear=True):
-        if game_field.players_score[0] > game_field.players_score[1]:
-            winner = '🟨'
-        else:
-            winner = '🟢'
-        o.put_markdown(f"""**游戏结束. 获胜方为 {winner}!**""")
-        o.put_markdown(f"""刷新页面开始一局游戏**""")
+    else:
+        with o.use_scope('msg', clear=True):
+            score = pd.read_csv("/root/WORK/GameAI/TicTacToe/score.csv",index_col=0)
+            if game_field.players_score[0] > game_field.players_score[1]:
+                winner = '🟨 %s'%(player_info[0])
+                score = update_score(score,player_info[0],win=True,mode="PvP")
+                score = update_score(score,player_info[1],win=False,mode="PvP")
+            else:
+                winner = '🟢 %s'%(player_info[1])
+                score = update_score(score,player_info[0],win=False,mode="PvP")
+                score = update_score(score,player_info[1],win=True,mode="PvP")
+            o.put_markdown(f"""**游戏结束. 获胜方为 {winner}!**""")
+            o.put_markdown(f"""**刷新页面开始一局游戏**""")
+            score.to_csv("/root/WORK/GameAI/TicTacToe/score.csv")
+            refresh = True
 
 if __name__ == '__main__':
     pywebio.start_server(main, debug=True, port=9900)
